@@ -8,7 +8,8 @@
 
 - **工作区根** (`./`)：本仓 (origin: `nideyongbao/DMD3C`)，只放协调脚本与文档。
 - **子仓 1** (`./DMD3C/`)：clone 自 `Sharpiless/DMD3C`，是论文官方代码（**只是 BP-Net 的"补丁包"**，不能独立运行）。
-- **子仓 2** (`./BP-Net/`)：clone 自 `kakaxi314/BP-Net`，是模型主体仓 + 工作目录（`.venv` / `checkpoints` / `datas` / `outputs` 全在这里）。
+- **子仓 2** (`./BP-Net/`)：clone 自 `kakaxi314/BP-Net`，是模型主体仓 + 工作目录（`checkpoints` / `datas` / `outputs` 在这里）。
+- **uv venv** (`./.venv/`)：根工作区共享的虚拟环境，由 `setup_rtx4060.sh` 创建；host 与 BP-Net 都用它。
 - **入口**：`bash setup_rtx4060.sh`，从空状态拉起整套环境。
 - **推理已复现成功** (H20)：22 帧 → `BP-Net/outputs/`，单帧 ~317 ms。
 - **训练第二阶段**（KITTI metric fine-tune w/ distillation）代码完整；**第一阶段**（单视图伪标签预训练）数据 pipeline 还没开源 — README 标 TODO。
@@ -23,7 +24,10 @@ workspace-root (./, origin: nideyongbao/DMD3C)
 ├── REPRO_RTX4060.md        # 用户文档
 ├── CLAUDE.md               # 本文件
 ├── README.md               # 入口
-├── .gitignore              # 排除 DMD3C/、BP-Net/ 子目录
+├── .gitignore              # 排除 DMD3C/、BP-Net/、.venv/
+│
+├── .venv/                  # ★ 共享 uv venv（Python 3.9）。host 与 BP-Net 都用这一个
+│   └── lib/python3.9/site-packages/{torch, BpOps.so, hydra, ...}
 │
 ├── DMD3C/                  # ★ 由 setup 脚本 clone（origin: Sharpiless/DMD3C）
 │   ├── demo.py / demo.sh
@@ -33,21 +37,20 @@ workspace-root (./, origin: nideyongbao/DMD3C)
 │   ├── disp_loss.py / criteria.py / augs.py
 │   ├── datasets/  models/  configs/  exts/
 │   ├── checkpoints/  datas/                    # 空，下载产物落到 BP-Net 同名目录
-│   ├── setup_rtx4060.sh / REPRO_RTX4060.md / CLAUDE.md   # 历史副本（commit 9ad8619 / 57028d9，与本根仓内容对齐）
+│   ├── setup_rtx4060.sh / REPRO_RTX4060.md / CLAUDE.md   # 历史副本（commit 9ad8619 / 57028d9）
 │   └── ...
 │
 └── BP-Net/                 # ★ 由 setup 脚本 clone（origin: kakaxi314/BP-Net）
     │   DMD3C 文件 rsync 覆盖到这里之后才能运行
-    ├── .venv/              # uv 创建的 Python 3.9 venv
     ├── checkpoints/dmd3c_kitti.pth
     ├── datas/kitti/raw/2011_09_26/...
     ├── outputs/<idx>_*.png
-    ├── exts/build/         # BpOps 编译产物
+    ├── exts/build/         # BpOps 中间编译产物（最终装到 ../.venv/site-packages）
     ├── models/utils.py     # 含 BpOps CUDA 算子调用
     └── (来自 BP-Net 原仓 + DMD3C overlay 的所有源码)
 ```
 
-`./DMD3C` 和 `./BP-Net` 都被 `.gitignore` 排除，根仓只 track 顶层文件。
+`./DMD3C`、`./BP-Net`、`./.venv` 都被 `.gitignore` 排除，根仓只 track 顶层文件。
 
 ---
 
@@ -68,10 +71,9 @@ workspace-root (./, origin: nideyongbao/DMD3C)
 ### 3.1 一键脚本（推荐）
 从工作区根运行：
 ```bash
-bash setup_rtx4060.sh
-cd BP-Net
-source .venv/bin/activate
-bash demo.sh
+bash setup_rtx4060.sh             # 自动 clone DMD3C + BP-Net、装 uv（如缺）、建 ./.venv、编 BpOps、下数据
+source .venv/bin/activate          # ★ 激活根 venv（host 和 BP-Net 共用）
+cd BP-Net && bash demo.sh
 ```
 
 `setup_rtx4060.sh` 是幂等的：所有产物都先检查存在再决定是否重做，可反复运行。
@@ -88,24 +90,24 @@ git clone --depth 1 https://github.com/kakaxi314/BP-Net.git  $ROOT/BP-Net
 rsync -a --exclude .git --exclude .venv --exclude outputs \
     --exclude 'checkpoints/*.pth' --exclude 'datas/kitti/raw' \
     $ROOT/DMD3C/ $ROOT/BP-Net/
-cd $ROOT/BP-Net
 
 # 3) 应用两处 patch（如上游 DMD3C 已合并就 no-op）
 # 3a) utils_infer.py: chpt 接受文件路径或目录
 # 3b) demo.sh: gpus=[2] -> gpus=[0]
-sed -i 's|gpus=\[2\]|gpus=[0]|' demo.sh
+sed -i 's|gpus=\[2\]|gpus=[0]|' $ROOT/BP-Net/demo.sh
 
-# 4) uv venv (Python 3.9)
+# 4) uv venv 在工作区根 (Python 3.9) — host 和 BP-Net 共用
+cd $ROOT
 uv venv --python 3.9 .venv && source .venv/bin/activate
 
 # 5) 装 PyTorch cu121 + 依赖
 uv pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.3.1 torchvision==0.18.1
 uv pip install hydra-core==1.3.2 omegaconf einops timm opencv-python open3d imutils tqdm tensorboard matplotlib pillow h5py
 
-# 6) 编译 BpOps  (sm_89=4060, sm_86=30系, sm_90=H100/H20, sm_80=A100)
-cd exts
+# 6) 编译 BpOps 进根 venv (sm_89=4060, sm_86=30系, sm_90=H100/H20, sm_80=A100)
+cd $ROOT/BP-Net/exts
 TORCH_CUDA_ARCH_LIST=8.9 CUDA_HOME=/usr/local/cuda python setup.py install
-cd ..
+cd $ROOT/BP-Net
 
 # 7) 下权重
 mkdir -p checkpoints outputs
@@ -194,8 +196,8 @@ wget -O checkpoints/pretrained_mixed_singleview_256.pth \
 
 **4 卡 (官方推荐)**:
 ```bash
+source .venv/bin/activate         # 根 venv
 cd BP-Net
-source .venv/bin/activate
 
 torchrun --nproc_per_node=4 --master_port 4321 train_distill.py \
     gpus=[0,1,2,3] num_workers=4 name=DMD3D_BP_KITTI \
@@ -236,7 +238,7 @@ torchrun --nproc_per_node=1 --master_port 4321 train_distill.py \
 ### 4.6 评测官方权重 / 自训权重
 
 ```bash
-cd BP-Net && source .venv/bin/activate
+source .venv/bin/activate && cd BP-Net
 
 # selval（官方 1000 帧，本地有 GT）
 python test.py gpus=[0] name=eval_dmd3c \
@@ -259,7 +261,7 @@ python test.py gpus=[0] name=submit_dmd3c \
 - **硬件**: NVIDIA H20 (96 GB, sm_90), 24 核 CPU, 122 GB RAM, /shard_data 3.5 TB
 - **OS**: Ubuntu 24.04, kernel 6.8.0
 - **驱动 / 工具链**: NVIDIA driver 570.195.03 (CUDA 12.8), nvcc 12.8, gcc 13.3
-- **venv**: `BP-Net/.venv` (Python 3.9.25), 由 `uv 0.11.1` 管理
+- **venv**: `./.venv` (Python 3.9.25, 工作区根), 由 `uv 0.11.1` 管理；host 与 BP-Net 共用
 - **关键版本**: torch 2.3.1+cu121, torchvision 0.18.1+cu121, hydra-core 1.3.2, timm 1.0.26, einops 0.8+, open3d (装最新)
 - **代理**（如需）: `export http_proxy=http://proxy.parametrix.cn:9999; export https_proxy=$http_proxy`
 
@@ -279,7 +281,7 @@ python test.py gpus=[0] name=submit_dmd3c \
 
 ## 7. 给后续 Claude 的工作提示
 
-1. **进入新会话第一件事**：读 `CLAUDE.md`，确认 `./BP-Net/.venv` 是否存在；不存在就跑 `setup_rtx4060.sh`。
+1. **进入新会话第一件事**：读 `CLAUDE.md`，确认 `./.venv` 是否存在；不存在就跑 `setup_rtx4060.sh`。
 2. **改代码**：永远改 `BP-Net/` 下的文件（运行时实际依赖的副本）；如要回流到 DMD3C 上游，再 `cp` 回 `DMD3C/` 同名文件并在 DMD3C 子仓里 commit。
 3. **commit 范围**：根仓只 commit 顶层脚本/文档；DMD3C 和 BP-Net 子仓的修改各自在自己 .git 里 commit。三层 git 不要混。
 4. **不要 push**：所有 commit 都只在本地，除非用户明确说 push。

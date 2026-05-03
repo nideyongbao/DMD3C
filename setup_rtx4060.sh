@@ -56,12 +56,19 @@ GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 log "GPU detected: $GPU_NAME"
 
 ###############################################################################
-# 2. uv install
+# 2. uv install (idempotent: skip if already present, otherwise install + PATH)
 ###############################################################################
-if ! command -v uv >/dev/null; then
-  log "Installing uv (https://github.com/astral-sh/uv)"
+if ! command -v uv >/dev/null 2>&1; then
+  log "uv not found, installing from https://astral.sh/uv/install.sh"
+  command -v curl >/dev/null || die "curl not found. sudo apt install -y curl"
   curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
+  # uv installer drops binary in ~/.local/bin or ~/.cargo/bin
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+    [ -x "$d/uv" ] && export PATH="$d:$PATH"
+  done
+  command -v uv >/dev/null 2>&1 || die "uv install failed; check $HOME/.local/bin/uv"
+  warn "uv was just installed. After this script finishes, add to your shell rc:"
+  warn '    export PATH="$HOME/.local/bin:$PATH"'
 fi
 log "uv version: $(uv --version)"
 
@@ -128,15 +135,16 @@ fi
 sed -i 's|gpus=\[2\]|gpus=[0]|' "$BPNET_DIR/demo.sh" 2>/dev/null || true
 
 ###############################################################################
-# 5. Python venv via uv
+# 5. Python venv via uv (created at workspace root, shared between host and BP-Net)
 ###############################################################################
-cd "$BPNET_DIR"
-if [ ! -d ".venv" ]; then
-  log "Creating uv venv with Python $PYTHON_VERSION"
-  uv venv --python "$PYTHON_VERSION" .venv
+VENV_DIR="$ROOT/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+  log "Creating uv venv at $VENV_DIR with Python $PYTHON_VERSION"
+  uv venv --python "$PYTHON_VERSION" "$VENV_DIR"
 fi
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source "$VENV_DIR/bin/activate"
+export VIRTUAL_ENV="$VENV_DIR"
 
 log "Installing PyTorch 2.3.1 (cu121) + runtime deps"
 uv pip install --index-url https://download.pytorch.org/whl/cu121 \
@@ -147,10 +155,11 @@ uv pip install \
   matplotlib pillow h5py
 
 ###############################################################################
-# 6. Build BpOps CUDA extension
+# 6. Build BpOps CUDA extension into the root venv
 ###############################################################################
+cd "$BPNET_DIR"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  log "Compiling BpOps for sm_${TORCH_CUDA_ARCH/./}"
+  log "Compiling BpOps for sm_${TORCH_CUDA_ARCH/./} into $VENV_DIR"
   pushd exts >/dev/null
     rm -rf build BpOps.egg-info
     TORCH_CUDA_ARCH_LIST="$TORCH_CUDA_ARCH" \
@@ -207,10 +216,14 @@ fi
 cat <<EOF
 
 ================================================================================
- Setup finished. To run inference:
+ Setup finished. The shared uv venv lives at:
 
+   $VENV_DIR
+
+ To run inference:
+
+   source $VENV_DIR/bin/activate
    cd $BPNET_DIR
-   source .venv/bin/activate
    bash demo.sh
 
  Outputs (88 PNGs for drive_${KITTI_DRIVE}, 4 per frame) will be written to:
@@ -218,7 +231,7 @@ cat <<EOF
    $BPNET_DIR/outputs/
 
  Disk footprint:
-   - PyTorch + deps   ~3.5 GB (.venv)
+   - PyTorch + deps   ~3.5 GB ($VENV_DIR)
    - DMD3C checkpoint  344 MB
    - KITTI drive_${KITTI_DRIVE} ~80 MB (22 frames)
 ================================================================================

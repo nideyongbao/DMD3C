@@ -2,6 +2,9 @@
 DMD3C/
 BP-Net/
 
+# uv-managed virtualenv (created by setup_rtx4060.sh at workspace root)
+.venv/
+
 # Misc
 __pycache__/
 *.pyc

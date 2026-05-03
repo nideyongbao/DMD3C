@@ -26,14 +26,14 @@ bash setup_rtx4060.sh
 
 脚本执行流程（约 5–10 分钟，主要看下载速度）：
 
-1. 检查 `git / wget / gcc / rsync / nvidia-smi`
-2. 安装 [`uv`](https://github.com/astral-sh/uv)（如未安装）
+1. 检查 `git / wget / gcc / rsync / curl / nvidia-smi`
+2. **如未装 uv，自动从 `astral.sh/uv/install.sh` 安装**，并把 `~/.local/bin` 加到当前 shell 的 PATH。脚本结束后建议在 `~/.bashrc`/`~/.zshrc` 永久加上 `export PATH="$HOME/.local/bin:$PATH"`。
 3. `git clone` DMD3C 到 `./DMD3C/` 和 BP-Net 到 `./BP-Net/`
 4. 把 DMD3C 文件覆盖到 BP-Net 工作目录中
 5. 应用两处 in-place patch（`utils_infer.py` chpt 路径、`demo.sh` GPU id）
-6. `uv venv` 创建 Python 3.9 虚拟环境
+6. **在工作区根 `./` 创建 `uv venv`（路径 `./.venv`，Python 3.9）。** 此 venv 是 host 与 BP-Net 共享的——demo / train / test 都用它，不再在 BP-Net 内部建独立 venv。
 7. `uv pip install` PyTorch 2.3.1+cu121 + Hydra/timm/open3d 等
-8. 用 `nvcc` 编译 `BpOps` CUDA 扩展（针对 `TORCH_CUDA_ARCH`）
+8. 用 `nvcc` 编译 `BpOps` CUDA 扩展，安装到 `./.venv` 的 site-packages（针对 `TORCH_CUDA_ARCH`）
 9. 下载预训练权重 `dmd3c_distillation_depth_anything_v2.pth` (~344 MB) → `BP-Net/checkpoints/dmd3c_kitti.pth`
 10. 下载 KITTI raw `2011_09_26_calib.zip` + `2011_09_26_drive_0048_sync.zip` (~80 MB, 22 帧)
 11. 解压到 `BP-Net/datas/kitti/raw/`，建立 `BP-Net/outputs/`
@@ -41,9 +41,8 @@ bash setup_rtx4060.sh
 完成后按提示执行：
 
 ```bash
-cd BP-Net
-source .venv/bin/activate
-bash demo.sh
+source .venv/bin/activate         # 激活根 venv
+cd BP-Net && bash demo.sh
 ```
 
 ## 3. 可选环境变量
@@ -105,7 +104,7 @@ demo 单帧 batch=1 占用 < 4 GB。如果你的卡更小，可以编辑 `BP-Net
 ## 6. 卸载 / 清理
 
 ```bash
-rm -rf BP-Net DMD3C        # 删除子目录（含 .venv、权重、KITTI 数据）
+rm -rf .venv BP-Net DMD3C        # 删除根 venv 和两个子目录（含权重、KITTI 数据）
 ```
 
 `uv` 自身不会污染系统 Python；如需完全卸载：`rm -rf ~/.local/bin/uv ~/.local/share/uv ~/.cache/uv`。
