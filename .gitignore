@@ -1,0 +1,12 @@
+# Cloned upstream repos (each carries its own .git; managed by setup script)
+DMD3C/
+BP-Net/
+
+# Misc
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.swp
+.vscode/
+.idea/
